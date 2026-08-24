@@ -2572,8 +2572,12 @@ function Field({ label, children }) {
 const inputCls =
   "w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-slate-900 focus:ring-2 focus:ring-slate-900/10 transition";
 
-function Card({ children, className = "" }) {
-  return <div className={`bg-white border border-slate-200 rounded-2xl shadow-sm ${className}`}>{children}</div>;
+function Card({ children, className = "", ...rest }) {
+  return (
+    <div className={`bg-white border border-slate-200 rounded-2xl shadow-sm ${className}`} {...rest}>
+      {children}
+    </div>
+  );
 }
 
 function Banner({ tone = "error", children, onClose }) {
@@ -2719,6 +2723,55 @@ function LocationHelp({ onClose, onRetry }) {
           <Btn variant="amber" className="flex-1" onClick={retry} disabled={retrying}>
             {retrying ? "확인 중…" : "다시 확인"}
           </Btn>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+/* Shown when an admin clicks a check-in/check-out location text.
+   Renders an embedded map (OpenStreetMap, no API key required) centered
+   on the recorded lat/lng, plus the address/accuracy and a link out to
+   Google Maps for the fully precise, zoomable view. */
+function LocationMapModal({ loc, title, onClose }) {
+  if (!loc) return null;
+  const span = 0.006; // ~small bbox around the point, in degrees
+  const bbox = [loc.lng - span, loc.lat - span, loc.lng + span, loc.lat + span].join("%2C");
+  const embedSrc = `https://www.openstreetmap.org/export/embed.html?bbox=${bbox}&layer=mapnik&marker=${loc.lat}%2C${loc.lng}`;
+
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-900/40 flex items-end sm:items-center justify-center p-4" onClick={onClose}>
+      <Card className="w-full max-w-lg overflow-hidden max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 shrink-0">
+          <div>
+            <div className="text-sm font-bold text-slate-900">📍 {title}</div>
+            <div className="text-[11px] text-slate-400 mt-0.5">
+              {loc.address ? `${loc.address} · ` : ""}
+              오차 약 {loc.accuracy ?? "?"}m
+            </div>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 text-lg leading-none">
+            ✕
+          </button>
+        </div>
+        <div className="flex-1 min-h-[280px] bg-slate-100">
+          <iframe
+            title="위치 지도"
+            src={embedSrc}
+            className="w-full h-full min-h-[280px] border-0"
+            loading="lazy"
+          />
+        </div>
+        <div className="flex items-center justify-between gap-2 px-5 py-3 border-t border-slate-100 shrink-0">
+          <div className="text-[11px] text-slate-400">{loc.lat}, {loc.lng}</div>
+          <a
+            href={mapUrl(loc)}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600 hover:text-slate-900 underline"
+          >
+            구글맵에서 정확히 보기 ↗
+          </a>
         </div>
       </Card>
     </div>
@@ -3153,6 +3206,7 @@ function AttendanceTab({ courses }) {
   const [courseId, setCourseId] = useState(courses[0]?.id || "");
   const [rows, setRows] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [mapModal, setMapModal] = useState(null); // { loc, title } | null
 
   useEffect(() => {
     if (courses.length && !courseId) setCourseId(courses[0].id);
@@ -3254,7 +3308,7 @@ function AttendanceTab({ courses }) {
               {rows.map((r) => (
                 <tr key={r.employeeId} className="border-b border-slate-100 last:border-0">
                   <td className="px-4 py-3 font-semibold text-slate-800 whitespace-nowrap">{r.employeeId}</td>
-                  {days.map((d) => {
+                  {days.map((d, i) => {
                     const rec = r.days?.[d];
                     return (
                       <td key={d} className="px-3 py-3 text-center align-top">
@@ -3263,15 +3317,19 @@ function AttendanceTab({ courses }) {
                             <div>
                               <div className="text-emerald-600 font-semibold">{rec?.checkIn || "-"}</div>
                               {rec?.checkInLoc ? (
-                                <a
-                                  href={mapUrl(rec.checkInLoc)}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  title={`정확한 위치 보기 (오차 약 ${rec.checkInLoc.accuracy || "?"}m)`}
-                                  className="text-[10px] text-slate-500 hover:text-slate-800 underline decoration-dotted leading-tight block"
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setMapModal({
+                                      loc: rec.checkInLoc,
+                                      title: `${r.employeeId} · ${i + 1}일차 입실 위치`,
+                                    })
+                                  }
+                                  title={`지도에서 자세히 보기 (오차 약 ${rec.checkInLoc.accuracy || "?"}m)`}
+                                  className="text-[10px] text-slate-500 hover:text-slate-800 underline decoration-dotted leading-tight block w-full text-center"
                                 >
                                   📍 {rec.checkInLoc.address || "위치 보기"}
-                                </a>
+                                </button>
                               ) : rec?.checkIn ? (
                                 <div className="text-[10px] text-slate-300">위치 없음</div>
                               ) : null}
@@ -3279,15 +3337,19 @@ function AttendanceTab({ courses }) {
                             <div>
                               <div className="text-rose-500 font-semibold">{rec?.checkOut || "-"}</div>
                               {rec?.checkOutLoc ? (
-                                <a
-                                  href={mapUrl(rec.checkOutLoc)}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  title={`정확한 위치 보기 (오차 약 ${rec.checkOutLoc.accuracy || "?"}m)`}
-                                  className="text-[10px] text-slate-500 hover:text-slate-800 underline decoration-dotted leading-tight block"
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setMapModal({
+                                      loc: rec.checkOutLoc,
+                                      title: `${r.employeeId} · ${i + 1}일차 퇴실 위치`,
+                                    })
+                                  }
+                                  title={`지도에서 자세히 보기 (오차 약 ${rec.checkOutLoc.accuracy || "?"}m)`}
+                                  className="text-[10px] text-slate-500 hover:text-slate-800 underline decoration-dotted leading-tight block w-full text-center"
                                 >
                                   📍 {rec.checkOutLoc.address || "위치 보기"}
-                                </a>
+                                </button>
                               ) : rec?.checkOut ? (
                                 <div className="text-[10px] text-slate-300">위치 없음</div>
                               ) : null}
@@ -3305,6 +3367,8 @@ function AttendanceTab({ courses }) {
           </table>
         )}
       </Card>
+
+      {mapModal && <LocationMapModal loc={mapModal.loc} title={mapModal.title} onClose={() => setMapModal(null)} />}
     </div>
   );
 }
@@ -3448,11 +3512,16 @@ function UserLogin({ course, setView, reload }) {
   const days = dateRange(course.startDate, course.endDate);
 
   const submit = () => {
-    if (!empId.trim()) {
+    const v = empId.trim();
+    if (!v) {
       setErr("사번을 입력하세요.");
       return;
     }
-    setView({ name: "user-session", courseId: course.id, empId: empId.trim() });
+    if (!/^\d{8}$/.test(v)) {
+      setErr("사번은 숫자 8자리여야 합니다.");
+      return;
+    }
+    setView({ name: "user-session", courseId: course.id, empId: v });
   };
 
   return (
@@ -3470,18 +3539,21 @@ function UserLogin({ course, setView, reload }) {
           </Banner>
         )}
         <div className="space-y-4">
-          <Field label="사번">
+          <Field label="사번 (숫자 8자리)">
             <input
               autoFocus
+              type="tel"
               inputMode="numeric"
+              maxLength={8}
               value={empId}
-              onChange={(e) => setEmpId(e.target.value)}
+              onChange={(e) => setEmpId(e.target.value.replace(/\D/g, "").slice(0, 8))}
               onKeyDown={(e) => e.key === "Enter" && submit()}
               className={`${inputCls} text-center text-lg font-bold tracking-wide`}
-              placeholder="사번 입력"
+              placeholder="예: 12345678"
             />
+            <div className={`text-[11px] mt-1 text-right ${empId.length === 8 ? "text-emerald-600" : "text-slate-400"}`}>{empId.length} / 8</div>
           </Field>
-          <Btn variant="amber" className="w-full" onClick={submit}>
+          <Btn variant="amber" className="w-full" onClick={submit} disabled={empId.length !== 8}>
             확인
           </Btn>
         </div>
@@ -3545,14 +3617,21 @@ function UserSession({ course, empId, setView, reload }) {
     setBusy(true);
     setMsg(null);
     const locResult = await getLocationDetailed();
-    let loc = null;
-    if (locResult.ok) {
-      loc = locResult.loc;
-      const address = await reverseGeocode(loc.lat, loc.lng); // best-effort; null on failure
-      if (address) loc.address = address;
-    } else if (locResult.reason === "denied") {
-      setShowLocHelp(true);
+    if (!locResult.ok) {
+      if (locResult.reason === "denied") {
+        setShowLocHelp(true);
+        setMsg({ tone: "error", text: "위치 권한이 꺼져 있어 입실/퇴실을 처리할 수 없습니다. 위치를 허용한 뒤 다시 시도해주세요." });
+      } else if (locResult.reason === "unsupported") {
+        setMsg({ tone: "error", text: "이 브라우저는 위치 확인을 지원하지 않아 입실/퇴실을 처리할 수 없습니다." });
+      } else {
+        setMsg({ tone: "error", text: "위치를 확인하지 못했습니다. GPS가 켜져 있는지 확인하고 다시 시도해주세요." });
+      }
+      setBusy(false);
+      return;
     }
+    const loc = locResult.loc;
+    const address = await reverseGeocode(loc.lat, loc.lng); // best-effort; null on failure
+    if (address) loc.address = address;
     const fresh = await getAttendance(course.id, empId);
     const dayData = { ...(fresh.days?.[today] || {}) };
     if (type === "in") {
@@ -3562,7 +3641,7 @@ function UserSession({ course, empId, setView, reload }) {
         return;
       }
       dayData.checkIn = nowTime();
-      if (loc) dayData.checkInLoc = loc;
+      dayData.checkInLoc = loc;
     } else {
       if (!dayData.checkIn) {
         setMsg({ tone: "error", text: "입실 기록이 없습니다. 먼저 입실해주세요." });
@@ -3575,13 +3654,12 @@ function UserSession({ course, empId, setView, reload }) {
         return;
       }
       dayData.checkOut = nowTime();
-      if (loc) dayData.checkOutLoc = loc;
+      dayData.checkOutLoc = loc;
     }
     const nextDays = { ...(fresh.days || {}), [today]: dayData };
     await setAttendance(course.id, empId, nextDays);
     setRec({ employeeId: empId, days: nextDays });
-    const locNote = loc ? " · 위치 기록됨" : "";
-    setMsg({ tone: "ok", text: (type === "in" ? `입실 완료 (${dayData.checkIn})` : `퇴실 완료 (${dayData.checkOut})`) + locNote });
+    setMsg({ tone: "ok", text: (type === "in" ? `입실 완료 (${dayData.checkIn})` : `퇴실 완료 (${dayData.checkOut})`) + " · 위치 기록됨" });
     setBusy(false);
   };
 
@@ -3647,7 +3725,7 @@ function UserSession({ course, empId, setView, reload }) {
               </div>
             </div>
             <div className="text-[11px] text-slate-400 text-center mb-3 leading-relaxed">
-              입실/퇴실 시 위치 확인을 요청하는 팝업이 뜰 수 있어요. 허용하면 위치가 함께 기록되고, 거부해도 출결 처리는 정상적으로 돼요.
+              입실/퇴실 시 위치 확인 팝업이 뜨면 <b>반드시 허용</b>해주세요. 위치를 허용하지 않으면 입실/퇴실이 처리되지 않아요.
             </div>
             <div className="grid grid-cols-2 gap-3">
               <Btn variant="success" className="py-3.5" disabled={!inRange || busy || !!todayRec?.checkIn} onClick={() => doCheck("in")}>
