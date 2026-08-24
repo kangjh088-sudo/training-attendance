@@ -2478,17 +2478,32 @@ function mapUrl(loc) {
   return loc ? `https://www.google.com/maps?q=${loc.lat},${loc.lng}` : "";
 }
 
-/* Reverse-geocode lat/lng into a short readable Korean address like
-   "서울특별시 관악구", using the free OpenStreetMap Nominatim API.
+/* Reverse-geocode lat/lng into a full Korean road-name address like
+   "전라남도 나주시 우정로 77", using the free OpenStreetMap Nominatim API.
+   zoom=18 asks Nominatim for building-level detail so the road name and
+   house number are included, not just the district.
    Best-effort: returns null on any failure, never throws. */
 async function reverseGeocode(lat, lng) {
   try {
-    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}&accept-language=ko&zoom=14`);
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}&accept-language=ko&zoom=18&addressdetails=1`
+    );
     if (!res.ok) return null;
     const data = await res.json();
     const addr = data.address || {};
-    const parts = [addr.state, addr.city_district || addr.borough || addr.county || addr.city].filter(Boolean);
-    if (parts.length) return parts.join(" ");
+    const region = addr.state || addr.province;
+    const city = addr.city || addr.county || addr.city_district || addr.borough;
+    const road = addr.road;
+    const houseNumber = addr.house_number;
+
+    // Prefer a full road-name address: 시/도 + 시/군/구 + 도로명 + 번지
+    const roadParts = [region, city, road, houseNumber].filter(Boolean);
+    if (road && roadParts.length) return roadParts.join(" ");
+
+    // Fall back to district-level (no road data available, e.g. rural areas)
+    const districtParts = [region, city || addr.suburb].filter(Boolean);
+    if (districtParts.length) return districtParts.join(" ");
+
     return data.display_name ? data.display_name.split(",").slice(0, 2).join(",").trim() : null;
   } catch (e) {
     return null;
@@ -3544,10 +3559,12 @@ function UserLogin({ course, setView, reload }) {
               autoFocus
               type="tel"
               inputMode="numeric"
+              pattern="\d{8}"
+              required
               maxLength={8}
               value={empId}
               onChange={(e) => setEmpId(e.target.value.replace(/\D/g, "").slice(0, 8))}
-              onKeyDown={(e) => e.key === "Enter" && submit()}
+              onKeyDown={(e) => e.key === "Enter" && empId.length === 8 && submit()}
               className={`${inputCls} text-center text-lg font-bold tracking-wide`}
               placeholder="예: 12345678"
             />
@@ -3582,13 +3599,18 @@ function UserSession({ course, empId, setView, reload }) {
   const inRange = course && today >= course.startDate && today <= course.endDate;
   const beforeStart = course && today < course.startDate;
 
+  // Defense in depth: even if this screen were ever reached with a
+  // malformed employee ID (e.g. a hand-edited URL), refuse to load or
+  // record attendance and bounce back to the login screen instead.
+  const validEmpId = /^\d{8}$/.test(String(empId || ""));
+
   const load = useCallback(async () => {
-    if (!course) return;
+    if (!course || !validEmpId) return;
     setLoading(true);
     const data = await getAttendance(course.id, empId);
     setRec(data);
     setLoading(false);
-  }, [course, empId]);
+  }, [course, empId, validEmpId]);
 
   useEffect(() => {
     load();
@@ -3611,9 +3633,23 @@ function UserSession({ course, empId, setView, reload }) {
     return <CourseNotFound setView={setView} reload={reload} />;
   }
 
+  if (!validEmpId) {
+    return (
+      <div className="max-w-sm mx-auto mt-8">
+        <Banner tone="error">사번이 올바르지 않습니다. (숫자 8자리)</Banner>
+        <Card className="p-6 text-center">
+          <Btn variant="amber" className="w-full" onClick={() => setView({ name: "user-login", courseId: course.id })}>
+            사번 다시 입력하기
+          </Btn>
+        </Card>
+      </div>
+    );
+  }
+
   const todayRec = rec?.days?.[today];
 
   const doCheck = async (type) => {
+    if (!validEmpId) return;
     setBusy(true);
     setMsg(null);
     const locResult = await getLocationDetailed();
